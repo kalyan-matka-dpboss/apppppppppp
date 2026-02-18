@@ -5,8 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MEENAXPDF - Premium Secure Converter</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Core Libraries: Using the most compatible versions for browser encryption -->
+    <!-- Core Libraries -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <!-- Encryption Dependency: Forge is required for jsPDF encryption to work in browsers -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/forge/1.3.1/forge.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap');
         
@@ -103,13 +105,6 @@
             border-radius: 50%;
             transition: transform 0.3s;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
-
-        /* Glassmorphism success card */
-        .success-card {
-            background: rgba(255, 255, 255, 0.8);
-            border: 2px solid #22c55e20;
-            backdrop-filter: blur(10px);
         }
     </style>
 </head>
@@ -278,7 +273,7 @@
         </div>
     </footer>
 
-    <div id="status" class="fixed bottom-6 right-6 hidden px-6 py-4 rounded-2xl shadow-2xl font-black text-[10px] uppercase tracking-widest border animate-pop-in"></div>
+    <div id="status" class="fixed bottom-6 right-6 hidden px-6 py-4 rounded-2xl shadow-2xl font-black text-[10px] uppercase tracking-widest border animate-pop-in z-[100]"></div>
 
     <script>
         const { jsPDF } = window.jspdf;
@@ -298,7 +293,7 @@
         const finalNameText = document.getElementById('final-name');
 
         let selectedFiles = [];
-        let generatedDoc = null;
+        let generatedDocBlob = null;
         let finalFilename = "";
 
         passwordToggle.addEventListener('change', () => passwordBox.classList.toggle('hidden', !passwordToggle.checked));
@@ -366,9 +361,9 @@
             try {
                 showStatus('ENCRYPTING DOCUMENT...', 'info');
                 convertBtn.disabled = true;
+                convertBtn.innerText = 'Converting...';
 
-                // IMPORTANT: We use a more direct approach to ensure encryption parameters
-                // are passed during the creation phase of the document for some browser engines.
+                // Use jsPDF to create document
                 const doc = new jsPDF();
                 
                 for (let i = 0; i < selectedFiles.length; i++) {
@@ -376,12 +371,38 @@
                     const imgProps = doc.getImageProperties(imgData);
                     const pdfWidth = doc.internal.pageSize.getWidth();
                     const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+                    
                     if (i > 0) doc.addPage();
                     doc.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
                 }
 
-                generatedDoc = doc;
                 finalFilename = (useRename && customTitle) ? `${customTitle}.pdf` : `MEENAX_SECURE_${Date.now()}.pdf`;
+
+                // Handle Encryption
+                if (usePwd && pwd) {
+                    // Set encryption options for jsPDF
+                    // jsPDF uses forge internally for its encryption module if configured
+                    // We generate the blob with encryption parameters
+                    generatedDocBlob = doc.output('blob', {
+                        userPassword: pwd,
+                        ownerPassword: pwd,
+                        encryption: {
+                            userPassword: pwd,
+                            ownerPassword: pwd,
+                            permissions: {
+                                printing: 'highResolution',
+                                copying: false,
+                                modifying: false,
+                                annotating: false,
+                                fillingForms: false,
+                                contentAccessibility: true,
+                                documentAssembly: false
+                            }
+                        }
+                    });
+                } else {
+                    generatedDocBlob = doc.output('blob');
+                }
 
                 mainView.classList.add('hidden');
                 resultView.classList.remove('hidden');
@@ -392,73 +413,53 @@
                 console.error(err);
                 showStatus('CONVERSION FAILED', 'error');
                 convertBtn.disabled = false;
+                convertBtn.innerText = 'Lock & Convert to PDF';
             }
         });
 
         document.getElementById('save-btn').addEventListener('click', () => {
-            if (!generatedDoc) return;
-            const pwd = document.getElementById('pdf-password').value;
-            const usePwd = passwordToggle.checked;
-
-            if (usePwd && pwd) {
-                // High-level encryption implementation for jsPDF
-                // This will trigger the standard browser PDF protection prompt upon opening
-                generatedDoc.save(finalFilename, {
-                    userPassword: pwd,
-                    ownerPassword: pwd,
-                    encryption: {
-                        userPassword: pwd,
-                        ownerPassword: pwd,
-                        permissions: {
-                            printing: 'highResolution',
-                            copying: false,
-                            modifying: false
-                        }
-                    }
-                });
-            } else {
-                generatedDoc.save(finalFilename);
-            }
+            if (!generatedDocBlob) return;
+            const url = URL.createObjectURL(generatedDocBlob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = finalFilename;
+            link.click();
+            URL.revokeObjectURL(url);
         });
 
         document.getElementById('share-btn').addEventListener('click', async () => {
-            if (!generatedDoc) return;
-            const pwd = document.getElementById('pdf-password').value;
-            const usePwd = passwordToggle.checked;
-
-            let blob;
-            if (usePwd && pwd) {
-                blob = generatedDoc.output('blob', {
-                    userPassword: pwd,
-                    ownerPassword: pwd
-                });
-            } else {
-                blob = generatedDoc.output('blob');
-            }
-
-            const file = new File([blob], finalFilename, { type: 'application/pdf' });
+            if (!generatedDocBlob) return;
+            const file = new File([generatedDocBlob], finalFilename, { type: 'application/pdf' });
 
             if (navigator.share && navigator.canShare({ files: [file] })) {
                 try {
-                    await navigator.share({ files: [file], title: 'Secure Document' });
-                } catch (e) {}
+                    await navigator.share({ 
+                        files: [file], 
+                        title: 'Secure MEENAX Document',
+                        text: 'Sharing a password protected PDF.'
+                    });
+                } catch (e) {
+                    showStatus('SHARING CANCELLED', 'info');
+                }
             } else {
-                showStatus('SHARE NOT SUPPORTED', 'error');
+                showStatus('SHARE NOT SUPPORTED BY BROWSER', 'error');
             }
         });
 
         window.resetApp = () => {
             clearAll();
-            generatedDoc = null;
+            generatedDocBlob = null;
+            convertBtn.innerText = 'Lock & Convert to PDF';
             mainView.classList.remove('hidden');
             resultView.classList.add('hidden');
             statusDiv.classList.add('hidden');
         };
 
         function readFileAsDataURL(file) {
-            return new Promise((resolve) => {
+            return new Promise((resolve, reject) => {
                 const reader = new FileReader();
                 reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = (e) => reject(e);
                 reader.readAsDataURL(file);
             });
         }
@@ -467,10 +468,13 @@
             statusDiv.innerText = msg;
             statusDiv.classList.remove('hidden', 'bg-white', 'text-slate-900', 'text-red-600', 'text-green-600', 'border-slate-100');
             statusDiv.classList.add('bg-white', 'text-slate-900', 'border-slate-200');
-            if (type === 'error') statusDiv.classList.add('text-red-600');
-            if (type === 'success') statusDiv.classList.add('text-green-600');
+            
+            if (type === 'error') statusDiv.classList.add('text-red-600', 'border-red-200');
+            if (type === 'success') statusDiv.classList.add('text-green-600', 'border-green-200');
+            if (type === 'info') statusDiv.classList.add('text-purple-600', 'border-purple-200');
+            
             statusDiv.classList.remove('hidden');
-            setTimeout(() => statusDiv.classList.add('hidden'), 4000);
+            setTimeout(() => statusDiv.classList.add('hidden'), 5000);
         }
     </script>
 </body>
